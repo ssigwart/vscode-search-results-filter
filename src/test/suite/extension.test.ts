@@ -2,7 +2,8 @@ import * as assert from "assert";
 import * as vscode from "vscode";
 
 suite('Extension Test Suite', () => {
-	test('Test Filtering', async () => {
+	test('Test Filtering', async function () {
+		this.timeout(10000);
 		const initialText = [
 			"6 results - 3 files",
 			"",
@@ -44,7 +45,7 @@ suite('Extension Test Suite', () => {
 						setTimeout(() => {
 							assert.strictEqual(expectedText, doc.getText());
 							resolve();
-						}, 100);
+						}, 500);
 					});
 				}).then(() => {
 					// Test file inclusion
@@ -69,7 +70,7 @@ suite('Extension Test Suite', () => {
 						setTimeout(() => {
 							assert.strictEqual(expectedText, doc.getText().trimEnd());
 							resolve();
-						}, 100);
+						}, 500);
 					});
 				}).then(() => {
 					// Test word inclusion
@@ -95,7 +96,7 @@ suite('Extension Test Suite', () => {
 						setTimeout(() => {
 							assert.strictEqual(expectedText, doc.getText().trimEnd());
 							resolve();
-						}, 100);
+						}, 500);
 					});
 				}).then(() => {
 					// Test second word inclusion
@@ -118,7 +119,7 @@ suite('Extension Test Suite', () => {
 						setTimeout(() => {
 							assert.strictEqual(expectedText, doc.getText().trimEnd());
 							resolve();
-						}, 100);
+						}, 500);
 					});
 				}).then(() => {
 					// Test edits in body section
@@ -141,7 +142,7 @@ suite('Extension Test Suite', () => {
 						setTimeout(() => {
 							assert.strictEqual(expectedText, doc.getText().trimEnd());
 							resolve();
-						}, 100);
+						}, 500);
 					});
 				});
 			});

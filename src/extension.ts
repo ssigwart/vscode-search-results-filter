@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { addFilteredStartedEdit, filterLines, getFilters, getNextFileNameLine, getNextFileNameLineInDoc, RemovedLine, searchResultFilteringStarted, shouldContentChangeTriggerRefilter } from './searchHelpers';
+import * as Diff from 'diff';
 
 // Original search results text per doc
 let docOriginalSearchResults = new Map<vscode.Uri, string>();
@@ -23,6 +24,7 @@ let lastChangeWasFilter = false;
 /** Activate text change handler */
 function activateTextChange(context: vscode.ExtensionContext): void
 {
+	let timeout: NodeJS.Timeout | undefined;
 	const disposable = vscode.workspace.onDidChangeTextDocument((e: vscode.TextDocumentChangeEvent) => {
 		const doc = e.document;
 		// Is this a search result?
@@ -55,10 +57,10 @@ function activateTextChange(context: vscode.ExtensionContext): void
 						let breakOnNextVisibleLine = false;
 						for (let removedLine of removedLines)
 						{
-							const visibleLineCounBetween = (removedLine.line - (lastHiddenLine + 1));
-							if (breakOnNextVisibleLine && visibleLineCounBetween > 0)
+							const visibleLineCountBetween = (removedLine.line - (lastHiddenLine + 1));
+							if (breakOnNextVisibleLine && visibleLineCountBetween > 0)
 								break;
-							visibleLineCnt += visibleLineCounBetween;
+							visibleLineCnt += visibleLineCountBetween;
 							lastHiddenLine = removedLine.line;
 							if (visibleLineCnt >= contentChange.range.start.line)
 							{
@@ -81,53 +83,76 @@ function activateTextChange(context: vscode.ExtensionContext): void
 				// Should we filter?
 				if (shouldContentChangeTriggerRefilter(e))
 				{
-					editor.edit((editBuilder: vscode.TextEditorEdit) => {
-						// Get original text
-						if (origSearchText !== undefined)
-						{
-							// Mark filtered as started
-							const filters = getFilters(doc);
-							if (!filteringStarted && filters.length > 0)
+					// Clear timeout
+					if (timeout !== undefined)
+						clearTimeout(timeout);
+					// Debounce
+					timeout = setTimeout(function() {
+						editor.edit((editBuilder: vscode.TextEditorEdit) => {
+							// Get original text
+							if (origSearchText !== undefined)
 							{
-								origSearchText = addFilteredStartedEdit(doc, editBuilder);
-								docOriginalSearchResults.set(doc.uri, origSearchText);
-							}
+								// Mark filtered as started
+								const filters = getFilters(doc);
+								if (!filteringStarted && filters.length > 0)
+								{
+									origSearchText = addFilteredStartedEdit(doc, editBuilder);
+									docOriginalSearchResults.set(doc.uri, origSearchText);
+								}
 
-							// Figure out lines to replace
-							const docReplaceStartLine = getNextFileNameLineInDoc(doc, 0) ?? doc.lineCount;
-							const replaceStartPos = new vscode.Position(docReplaceStartLine, 0);
-							const replaceEndPos = new vscode.Position(doc.lineCount, 0);
-							const replaceRange = new vscode.Range(replaceStartPos, replaceEndPos);
+								// Figure out lines to replace
+								const docReplaceStartLine = getNextFileNameLineInDoc(doc, 0) ?? doc.lineCount;
+								const replaceStartPos = new vscode.Position(docReplaceStartLine, 0);
+								const replaceEndPos = new vscode.Position(doc.lineCount, 0);
+								const replaceRange = new vscode.Range(replaceStartPos, replaceEndPos);
 
-							// Set replacement
-							let origSearchLines = origSearchText.split("\n");
-							let origSearchFirstResultsLine = getNextFileNameLine(origSearchLines, 0) ?? origSearchLines.length;
-							origSearchLines = origSearchLines.slice(origSearchFirstResultsLine);
-							const filteredLineInfo = filterLines(origSearchLines, filters);
-							let filteredLines = filteredLineInfo.retainedLines;
-							const newText = filteredLines.join("\n");
-							if (doc.getText(replaceRange) !== newText)
-							{
-								editBuilder.replace(replaceRange, newText);
-								lastChangeWasFilter = true;
-							}
+								// Set replacement
+								let origSearchLines = origSearchText.split("\n");
+								let origSearchFirstResultsLine = getNextFileNameLine(origSearchLines, 0) ?? origSearchLines.length;
+								origSearchLines = origSearchLines.slice(origSearchFirstResultsLine);
+								const filteredLineInfo = filterLines(origSearchLines, filters);
+								let filteredLines = filteredLineInfo.retainedLines;
+								const newText = filteredLines.join("\n");
+								const oldText = doc.getText(replaceRange);
+								if (oldText !== newText)
+								{
+									const diff = Diff.diffLines(oldText, newText, { ignoreWhitespace: false, ignoreCase: false });
+									let startLine = docReplaceStartLine;
+									for (const diffPart of diff)
+									{
+										if (diffPart.added)
+											editBuilder.insert(new vscode.Position(startLine, 0), diffPart.value);
+										else if (diffPart.removed)
+										{
+											const startPos = new vscode.Position(startLine, 0);
+											const endPos =  new vscode.Position(startLine + (diffPart.count ?? 1), 0);
+											editBuilder.replace(new vscode.Range(startPos, endPos), "");
+										}
+										startLine += diffPart.count ?? 0;
+									}
+									lastChangeWasFilter = true;
+								}
 
-							// Build list of original text removed line offsets
-							let removedLineOffsets: RemovedLine[] = [];
-							let offsetAdjust = 0;
-							for (let i = 0; i < origSearchFirstResultsLine; i++)
-								offsetAdjust += origSearchLines[i].length + 1; // +1 for \n
-							for (const removedLine of filteredLineInfo.removedLines)
-							{
-								removedLineOffsets.push({
-									line: removedLine.line + origSearchFirstResultsLine,
-									offset: removedLine.offset + offsetAdjust,
-									length: removedLine.length
-								});
+								// Build list of original text removed line offsets
+								let removedLineOffsets: RemovedLine[] = [];
+								let offsetAdjust = 0;
+								for (let i = 0; i < origSearchFirstResultsLine; i++)
+									offsetAdjust += origSearchLines[i].length + 1; // +1 for \n
+								for (const removedLine of filteredLineInfo.removedLines)
+								{
+									removedLineOffsets.push({
+										line: removedLine.line + origSearchFirstResultsLine,
+										offset: removedLine.offset + offsetAdjust,
+										length: removedLine.length
+									});
+								}
+								docLastRemovedLines.set(doc.uri, removedLineOffsets);
 							}
-							docLastRemovedLines.set(doc.uri, removedLineOffsets);
-						}
-					});
+						});
+					}, 250);
+
+					// Don't show save changes
+					vscode.commands.executeCommand('cleanSearchEditorState');
 				}
 			}
 		}
